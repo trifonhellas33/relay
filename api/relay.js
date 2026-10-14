@@ -1,6 +1,6 @@
 export const config = { runtime: "edge" };
-
-const ALLOW = /(^|\.)(chaturbate\.[a-z.]+|mmcdn\.com|highwebmedia\.com)$/i;
+const BLOCK = /^(localhost|\[::1?\]|0\.0\.0\.0)$|\.(localhost|local|internal)$|^\[(fc|fd|fe[89ab])|^(127|10|0)\.|^169\.254\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./i;
+const LST = /\/(api\/ts\/roomlist\/room-list|directoryCams|models\/new)\/?$/i;
 const UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +9,6 @@ const CORS = {
   "Access-Control-Expose-Headers": "content-length, content-range, accept-ranges",
 };
 const reply = (body, status) => new Response(body, { status, headers: CORS });
-
 export default async function handler(req) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const KEY = process.env.RELAY_KEY || "";
@@ -17,7 +16,7 @@ export default async function handler(req) {
   if (!KEY || u.searchParams.get("key") !== KEY) return reply("forbidden", 403);
   let target;
   try { target = new URL(u.searchParams.get("url") || ""); } catch (e) { return reply("bad url", 400); }
-  if (target.protocol !== "https:" || !ALLOW.test(target.hostname)) return reply("host not allowed", 400);
+  if (target.protocol !== "https:" || BLOCK.test(target.hostname)) return reply("host not allowed", 400);
   const ref = u.searchParams.get("ref") || target.origin + "/";
   let origin = target.origin;
   try { origin = new URL(ref).origin; } catch (e) {}
@@ -38,12 +37,15 @@ export default async function handler(req) {
     h.set("X-CSRFToken", t);
     h.set("Cookie", "csrftoken=" + t);
   }
+  const ttl = req.method === "GET" && !rg && LST.test(target.pathname) ? 45 : 0;
   try {
     const up = await fetch(target, { method: req.method === "HEAD" ? "HEAD" : post ? "POST" : "GET", headers: h, body, redirect: "follow" });
     const rh = new Headers(CORS);
-    for (const k of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) {
+    for (const k of ["content-type", "content-length", "content-range", "accept-ranges"]) {
       const v = up.headers.get(k); if (v) rh.set(k, v);
     }
+    const ct = up.headers.get("content-type") || "";
+    rh.set("Cache-Control", up.status === 200 && ttl ? "public, s-maxage=" + ttl + ", stale-while-revalidate=30" : up.status === 200 && /^image\//i.test(ct) ? "public, max-age=300, s-maxage=300" : "no-store");
     return new Response(up.body, { status: up.status, headers: rh });
   } catch (e) {
     return reply("upstream error: " + String(e), 502);
